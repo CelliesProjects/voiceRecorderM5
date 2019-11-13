@@ -1,12 +1,11 @@
-//#include <TFT_eSPI.h>
+/* this example has to be compiled with PSRAM enabled. */
 #include <M5Stack.h>
-#include <atomic>
+#include <atomic>              /* https://baptiste-wicht.com/posts/2012/07/c11-concurrency-tutorial-part-4-atomic-type.html */
 
 #define MICROPHONE             34
 #define SPEAKER                25
 #define BACKLIGHT              32
-
-#define BUFFER_SIZE            ESP.getPsramSize() / 3
+#define BUFFER_SIZE            ESP.getPsramSize() / 3        /* BUFFER_SIZE is no of samples and samples are stored in 16bit so this should be a safe value*/
 #define SAMPLING_FREQUENCY     22050
 
 #define LOWNOISE               true /* set to false to enable backlight dimming */
@@ -18,15 +17,11 @@ void logMemory() {
   log_d("Used PSRAM: %d from: %d", ESP.getPsramSize() - ESP.getFreePsram(), ESP.getPsramSize() );
 }
 
-// https://baptiste-wicht.com/posts/2012/07/c11-concurrency-tutorial-part-4-atomic-type.html
+int16_t*                          sampleBuffer;
+std::atomic<std::uint32_t>        currentSample{0};
+static hw_timer_t *               sampleTimer = NULL; /* only one timer is (re)used for both sampling and playback */
+unsigned int                      sampling_period_us = round( 1000000 * ( 1.0 / SAMPLING_FREQUENCY ) );
 
-int16_t* sampleBuffer;
-std::atomic<std::uint32_t>  currentSample{0};
-static hw_timer_t * sampleTimer = NULL;
-
-unsigned int sampling_period_us = round( 1000000 * ( 1.0 / SAMPLING_FREQUENCY ) );
-
-//this ISR should run on core 0
 static void IRAM_ATTR _sampleISR() {
   sampleBuffer[currentSample.load()] = analogRead( MICROPHONE );
   ++currentSample;
@@ -50,18 +45,13 @@ bool startSampler() {
 void setup() {
   pinMode( MICROPHONE, INPUT );
   pinMode( SPEAKER, OUTPUT );
-  sampleBuffer = (int16_t*)ps_malloc( BUFFER_SIZE * sizeof( int16_t ) );
   logMemory();
+
   tft.init();
   tft.setRotation( 1 );
   tft.fillScreen( TFT_BLACK );
   tft.setTextSize( 2 );
   tft.drawString( "M5-Stack voicerecorder", 10, 5, 2 );
-  tft.setCursor( 25, 40 );
-  tft.printf( "%3.1fkHz %3.1f kB %3.1fs", SAMPLING_FREQUENCY / 1000.0, ( BUFFER_SIZE * sizeof( int16_t ) ) / 1000.0, (float)BUFFER_SIZE / SAMPLING_FREQUENCY );
-  tft.drawString( "REC", 45, 200, 2 );
-  tft.drawString( "PLAY", 130, 200, 2 );
-  tft.drawString( "STOP", 220, 200, 2 );
 
   if ( LOWNOISE ) {
     pinMode( BACKLIGHT, OUTPUT );
@@ -69,14 +59,27 @@ void setup() {
   } else {
     ledcAttachPin( BACKLIGHT, 0);
     ledcSetup( 0, 1300, 16 );
-    ledcWrite( 0, 0xFFFF / 16 ); // Dimming the BACKLIGHT will produce more base noise
-  }  
+    ledcWrite( 0, 0xFFFF / 16 );     // Dimming the BACKLIGHT will produce more base noise
+  }
+
+  if ( !ESP.getPsramSize() ) {
+    tft.setCursor( 55, 40 );
+    tft.print( "NO PSRAM FOUND!" );
+    while ( 1 ) delay( 100 );
+  }
+
+  sampleBuffer = (int16_t*)ps_malloc( BUFFER_SIZE * sizeof( int16_t ) );
+  tft.setCursor( 25, 40 );
+  tft.printf( "%3.1fkHz %3.1f kB %3.1fs", SAMPLING_FREQUENCY / 1000.0, ( BUFFER_SIZE * sizeof( int16_t ) ) / 1000.0, (float)BUFFER_SIZE / SAMPLING_FREQUENCY );
+  tft.drawString( "REC", 45, 200, 2 );
+  tft.drawString( "PLAY", 130, 200, 2 );
+  tft.drawString( "STOP", 220, 200, 2 );
 }
 
 void loop() {
   M5.update();
-  if ( !sampleTimer && M5.BtnA.pressedFor( 10 ) ) startSampler();
-  if ( !sampleTimer && M5.BtnB.pressedFor( 10 ) ) startPlayback();
+  if ( !sampleTimer && M5.BtnA.pressedFor( 5 ) ) startSampler();
+  if ( !sampleTimer && M5.BtnB.pressedFor( 5 ) ) startPlayback();
   uint32_t pos = currentSample.load();
   tft.setCursor( 30, 100 );
   tft.printf( "%3i%% %7i/%7i", map( pos, 0, BUFFER_SIZE - 1, 0, 100 ), pos, BUFFER_SIZE );
@@ -90,9 +93,10 @@ void loop() {
 }
 
 void IRAM_ATTR _playThroughDAC_ISR() {
-  dacWrite( SPEAKER, map( sampleBuffer[currentSample.load()], 0, 2048, 0, 128 ) );
+  uint32_t pos = currentSample.load();
+  dacWrite( SPEAKER, map( sampleBuffer[pos], 0, 2048, 0, 128 ) );
   ++currentSample;
-  if ( currentSample.load() == BUFFER_SIZE ) {
+  if ( pos == BUFFER_SIZE ) {
     timerEnd( sampleTimer );
     sampleTimer = NULL;
     dacWrite( SPEAKER, 0 );
