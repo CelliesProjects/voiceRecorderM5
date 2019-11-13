@@ -23,12 +23,14 @@ static hw_timer_t *               sampleTimer = NULL; /* only one timer is (re)u
 unsigned int                      sampling_period_us = round( 1000000 * ( 1.0 / SAMPLING_FREQUENCY ) );
 
 static void IRAM_ATTR _sampleISR() {
-  sampleBuffer[currentSample.load()] = analogRead( MICROPHONE );
-  ++currentSample;
-  if ( currentSample.load() == BUFFER_SIZE ) {
+  uint32_t pos = currentSample.load();
+  if ( pos > BUFFER_SIZE - 1 ) {
     timerEnd( sampleTimer );
     sampleTimer = NULL;
+    return;
   }
+  sampleBuffer[pos] = analogRead( MICROPHONE );
+  ++currentSample;
 }
 
 bool startSampler() {
@@ -70,7 +72,7 @@ void setup() {
 
   sampleBuffer = (int16_t*)ps_malloc( BUFFER_SIZE * sizeof( int16_t ) );
   tft.setCursor( 25, 40 );
-  tft.printf( "%3.1fkHz %3.1f kB %3.1fs", SAMPLING_FREQUENCY / 1000.0, ( BUFFER_SIZE * sizeof( int16_t ) ) / 1000.0, (float)BUFFER_SIZE / SAMPLING_FREQUENCY );
+  tft.printf( "%3.1fkHz %4.1f kB %3.1fs", SAMPLING_FREQUENCY / 1000.0, ( BUFFER_SIZE * sizeof( int16_t ) ) / 1000.0, (float)BUFFER_SIZE / SAMPLING_FREQUENCY );
   tft.drawString( "REC", 45, 200, 2 );
   tft.drawString( "PLAY", 130, 200, 2 );
   tft.drawString( "STOP", 220, 200, 2 );
@@ -94,13 +96,14 @@ void loop() {
 
 void IRAM_ATTR _playThroughDAC_ISR() {
   uint32_t pos = currentSample.load();
-  dacWrite( SPEAKER, map( sampleBuffer[pos], 0, 2048, 0, 128 ) );
-  ++currentSample;
-  if ( pos == BUFFER_SIZE ) {
+  if ( pos > BUFFER_SIZE - 1 ) {
     timerEnd( sampleTimer );
     sampleTimer = NULL;
     dacWrite( SPEAKER, 0 );
+    return;
   }
+  dacWrite( SPEAKER, map( sampleBuffer[pos], 0, 2048, 0, 128 ) );
+  ++currentSample;
 }
 
 bool startPlayback() {
