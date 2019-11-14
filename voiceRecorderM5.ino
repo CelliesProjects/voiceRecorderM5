@@ -6,7 +6,7 @@
 #define SPEAKER                25
 #define BACKLIGHT              32
 #define BUFFER_SIZE            ESP.getPsramSize() / 3        /* BUFFER_SIZE is no of samples and samples are stored in 16bit so this should be a safe value*/
-#define SAMPLING_FREQUENCY     22050
+#define SAMPLING_FREQUENCY     48000
 
 #define LOWNOISE               true /* set to false to enable backlight dimming */
 
@@ -71,8 +71,8 @@ void setup() {
   }
 
   sampleBuffer = (int16_t*)ps_malloc( BUFFER_SIZE * sizeof( int16_t ) );
-  tft.setCursor( 25, 40 );
-  tft.printf( "%3.1fkHz %4.1f kB %3.1fs", SAMPLING_FREQUENCY / 1000.0, ( BUFFER_SIZE * sizeof( int16_t ) ) / 1000.0, (float)BUFFER_SIZE / SAMPLING_FREQUENCY );
+  tft.setCursor( 20, 40 );
+  tft.printf( "%3.1fkHz %4.1f kB %5.2fs", SAMPLING_FREQUENCY / 1000.0, ( BUFFER_SIZE * sizeof( int16_t ) ) / 1000.0, (float)BUFFER_SIZE / SAMPLING_FREQUENCY );
   tft.drawString( "REC", 45, 200, 2 );
   tft.drawString( "PLAY", 130, 200, 2 );
   tft.drawString( "STOP", 220, 200, 2 );
@@ -83,8 +83,9 @@ void loop() {
   if ( !sampleTimer && M5.BtnA.pressedFor( 5 ) ) startSampler();
   if ( !sampleTimer && M5.BtnB.pressedFor( 5 ) ) startPlayback();
   uint32_t pos = currentSample.load();
-  tft.setCursor( 30, 100 );
-  tft.printf( "%3i%% %7i/%7i", map( pos, 0, BUFFER_SIZE - 1, 0, 100 ), pos, BUFFER_SIZE );
+  tft.setCursor( 70, 100 );
+  tft.printf( "%3i%% %6.2fs", map( pos, 0, BUFFER_SIZE - 1, 0, 100 ), pos / (float)SAMPLING_FREQUENCY );
+  //tft.printf( "%3i%% %7i/%7i", map( pos, 0, BUFFER_SIZE - 1, 0, 100 ), pos, BUFFER_SIZE );
   if ( sampleTimer && M5.BtnC.pressedFor( 2 ) ) {
     timerAlarmDisable( sampleTimer );
     timerEnd( sampleTimer );
