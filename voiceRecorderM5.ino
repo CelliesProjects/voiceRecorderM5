@@ -5,7 +5,7 @@
 #define MICROPHONE             34
 #define SPEAKER                25
 #define BACKLIGHT              32
-#define BUFFER_SIZE            ESP.getPsramSize() / 3        /* BUFFER_SIZE is no of samples and samples are stored in 16bit so this should be a safe value*/
+#define BUFFER_SIZE            4*1000*1000
 #define SAMPLING_FREQUENCY     48000
 
 #define LOWNOISE               true /* set to false to enable backlight dimming */
@@ -17,9 +17,10 @@ void logMemory() {
   log_d("Used PSRAM: %d from: %d", ESP.getPsramSize() - ESP.getFreePsram(), ESP.getPsramSize() );
 }
 
-int16_t*                          sampleBuffer;
+int8_t*                           sampleBuffer;
+uint32_t                          allocatedSamples;
 std::atomic<std::uint32_t>        currentSample{0};
-static hw_timer_t *               sampleTimer = NULL; /* only one timer is (re)used for both sampling and playback */
+static hw_timer_t *               sampleTimer{NULL}; /* only one timer is (re)used for both sampling and playback */
 unsigned int                      sampling_period_us = round( 1000000 * ( 1.0 / SAMPLING_FREQUENCY ) );
 
 static void IRAM_ATTR _sampleISR() {
@@ -29,8 +30,8 @@ static void IRAM_ATTR _sampleISR() {
     sampleTimer = NULL;
     return;
   }
-  sampleBuffer[pos] = analogRead( MICROPHONE );
-  ++currentSample;
+  sampleBuffer[pos] = analogRead( MICROPHONE ) >> 4;
+  currentSample++;
 }
 
 bool startSampler() {
@@ -70,9 +71,11 @@ void setup() {
     while ( 1 ) delay( 100 );
   }
 
-  sampleBuffer = (int16_t*)ps_malloc( BUFFER_SIZE * sizeof( int16_t ) );
-  tft.setCursor( 20, 40 );
-  tft.printf( "%3.1fkHz %4.1f kB %5.2fs", SAMPLING_FREQUENCY / 1000.0, ( BUFFER_SIZE * sizeof( int16_t ) ) / 1000.0, (float)BUFFER_SIZE / SAMPLING_FREQUENCY );
+
+  sampleBuffer = (int8_t*)ps_malloc( BUFFER_SIZE * sizeof( int8_t ) );
+
+  tft.setCursor( 15, 40 );
+  tft.printf( "%3.1fkHz %5.1fkB %6.2fs", SAMPLING_FREQUENCY / 1000.0, ( BUFFER_SIZE * sizeof( int8_t ) ) / 1000.0, BUFFER_SIZE / (float)SAMPLING_FREQUENCY );
   tft.drawString( "REC", 45, 200, 2 );
   tft.drawString( "PLAY", 130, 200, 2 );
   tft.drawString( "STOP", 220, 200, 2 );
@@ -83,9 +86,10 @@ void loop() {
   if ( !sampleTimer && M5.BtnA.pressedFor( 5 ) ) startSampler();
   if ( !sampleTimer && M5.BtnB.pressedFor( 5 ) ) startPlayback();
   uint32_t pos = currentSample.load();
-  tft.setCursor( 70, 100 );
+  tft.setCursor( 85, 100 );
   tft.printf( "%3i%% %6.2fs", map( pos, 0, BUFFER_SIZE - 1, 0, 100 ), pos / (float)SAMPLING_FREQUENCY );
-  //tft.printf( "%3i%% %7i/%7i", map( pos, 0, BUFFER_SIZE - 1, 0, 100 ), pos, BUFFER_SIZE );
+  tft.setCursor( 60, 130 );
+  tft.printf( " %7i/%7i", pos, BUFFER_SIZE );
   if ( sampleTimer && M5.BtnC.pressedFor( 2 ) ) {
     timerAlarmDisable( sampleTimer );
     timerEnd( sampleTimer );
@@ -103,8 +107,8 @@ void IRAM_ATTR _playThroughDAC_ISR() {
     dacWrite( SPEAKER, 0 );
     return;
   }
-  dacWrite( SPEAKER, map( sampleBuffer[pos], 0, 2048, 0, 128 ) );
-  ++currentSample;
+  dacWrite( SPEAKER, sampleBuffer[pos] );
+  currentSample++;
 }
 
 bool startPlayback() {
